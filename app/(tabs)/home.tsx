@@ -112,8 +112,6 @@ export default function HomeScreen() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-
-      // ตรวจสอบว่ารหัสครอบครัวมีจริงไหม
       const { data: family, error: fError } = await supabase
         .from("families")
         .select("id, name")
@@ -139,6 +137,41 @@ export default function HomeScreen() {
     }
   };
 
+  // --- ฟังก์ชันออกจากครอบครัว ---
+  const handleLeaveFamily = async () => {
+    Alert.alert(
+      "ยืนยันการออกจากครอบครัว",
+      "คุณแน่ใจหรือไม่ว่าต้องการออกจากกลุ่มนี้? คุณจะไม่สามารถเห็นรายการซื้อของได้อีกจนกว่าจะเข้าร่วมใหม่",
+      [
+        { text: "ยกเลิก", style: "cancel" },
+        {
+          text: "ยืนยัน",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const {
+                data: { user },
+              } = await supabase.auth.getUser();
+              if (!user) return;
+
+              const { error } = await supabase
+                .from("family_members")
+                .delete()
+                .eq("user_id", user.id);
+
+              if (error) throw error;
+
+              Alert.alert("สำเร็จ", "คุณออกจากครอบครัวเรียบร้อยแล้ว");
+              fetchUserData();
+            } catch (error: any) {
+              Alert.alert("เกิดข้อผิดพลาด", error.message);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -155,17 +188,28 @@ export default function HomeScreen() {
       </Text>
 
       {hasFamily ? (
-        <View style={styles.card}>
-          <Ionicons
-            name="checkmark-circle"
-            size={40}
-            color="#2e7d32"
-            style={{ marginBottom: 10 }}
-          />
-          <Text style={styles.cardTitle}>ครอบครัวของคุณพร้อมใช้งานแล้ว</Text>
-          <Text style={styles.cardSub}>
-            ไปที่เมนู รายการซื้อ เพื่อเพิ่มของกินของใช้ได้เลย!
-          </Text>
+        <View>
+          <View style={styles.card}>
+            <Ionicons
+              name="checkmark-circle"
+              size={40}
+              color="#2e7d32"
+              style={{ marginBottom: 10 }}
+            />
+            <Text style={styles.cardTitle}>ครอบครัวของคุณพร้อมใช้งานแล้ว</Text>
+            <Text style={styles.cardSub}>
+              ไปที่เมนู รายการซื้อ เพื่อเพิ่มของกินของใช้ได้เลย!
+            </Text>
+          </View>
+
+          {/* ปุ่มออกจากครอบครัว */}
+          <TouchableOpacity
+            style={styles.leaveButton}
+            onPress={handleLeaveFamily}
+          >
+            <Ionicons name="exit-outline" size={22} color="#d32f2f" />
+            <Text style={styles.leaveText}>ออกจากครอบครัวนี้</Text>
+          </TouchableOpacity>
         </View>
       ) : (
         <View style={[styles.card, styles.warningCard]}>
@@ -262,13 +306,6 @@ export default function HomeScreen() {
           </View>
         </View>
       </Modal>
-
-      <TouchableOpacity
-        onPress={() => supabase.auth.signOut()}
-        style={styles.logoutButton}
-      >
-        <Text style={styles.logoutText}>ออกจากระบบ</Text>
-      </TouchableOpacity>
     </ScrollView>
   );
 }
@@ -345,6 +382,16 @@ const styles = StyleSheet.create({
   cancelBtn: { backgroundColor: "#eee" },
   confirmBtn: { backgroundColor: "#2e7d32" },
   confirmText: { color: "#fff", fontWeight: "bold" },
-  logoutButton: { marginTop: 40, alignItems: "center", marginBottom: 50 },
-  logoutText: { color: "#d32f2f", fontWeight: "600" },
+  leaveButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 20,
+    padding: 15,
+    backgroundColor: "#fff",
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: "#ffcdd2",
+  },
+  leaveText: { color: "#d32f2f", fontWeight: "bold", marginLeft: 8 },
 });
