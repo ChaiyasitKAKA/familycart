@@ -1,13 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useState } from "react";
+import { router, useFocusEffect } from "expo-router"; // เพิ่ม useFocusEffect
+import { useCallback, useEffect, useState } from "react"; // เพิ่ม useCallback
 import {
   ActivityIndicator,
   Alert,
-  Modal,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -16,31 +16,60 @@ import { Profile } from "../../types";
 
 export default function HomeScreen() {
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [hasFamily, setHasFamily] = useState<boolean | null>(null);
+  const [familyId, setFamilyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [summary, setSummary] = useState({ total: 0, bought: 0, pending: 0 });
+  const [totalSpent, setTotalSpent] = useState(0);
 
-  // States สำหรับ Create Family
-  const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
-  const [familyName, setFamilyName] = useState("");
-  const [creating, setCreating] = useState(false);
+  // --- ส่วนที่ 1: Auto Refresh เมื่อกดสลับ Tab กลับมาหน้านี้ ---
+  useFocusEffect(
+    useCallback(() => {
+      fetchData();
+    }, []),
+  );
 
-  // States สำหรับ Join Family
-  const [isJoinModalVisible, setIsJoinModalVisible] = useState(false);
-  const [joinId, setJoinId] = useState("");
-  const [joining, setJoining] = useState(false);
-
+  // --- ส่วนที่ 2: Realtime Subscription ดักฟังข้อมูลขณะเปิดหน้าจอนี้ ---
   useEffect(() => {
-    fetchUserData();
-  }, []);
+    const channel = supabase
+      .channel("home-refresh-channel")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "shopping_items",
+        },
+        (payload) => {
+          console.log("Change detected, refreshing stats...");
+          // ถ้ามี familyId อยู่แล้ว ให้ดึงแค่ Stat ใหม่เพื่อประหยัดทรัพยากร
+          if (familyId) {
+            fetchShoppingStats(familyId);
+          } else {
+            fetchData();
+          }
+        },
+      )
+      .subscribe();
 
-  const fetchUserData = async () => {
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [familyId]);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchData();
+    setRefreshing(false);
+  };
+
+  const fetchData = async () => {
     try {
       const {
         data: { user },
       } = await supabase.auth.getUser();
       if (!user) return;
 
-      // 1. ดึงข้อมูล Profile
       const { data: profileData } = await supabase
         .from("profiles")
         .select("*")
@@ -48,350 +77,261 @@ export default function HomeScreen() {
         .single();
       if (profileData) setProfile(profileData);
 
-      // 2. เช็คว่า User อยู่ในครอบครัวไหนหรือยัง
-      const { data: familyMember } = await supabase
+      const { data: memberData } = await supabase
         .from("family_members")
         .select("family_id")
         .eq("user_id", user.id)
         .maybeSingle();
 
-      setHasFamily(!!familyMember);
-    } catch (error) {
-      console.error("Error:", error);
+      if (memberData) {
+        setFamilyId(memberData.family_id);
+        await fetchShoppingStats(memberData.family_id);
+      } else {
+        setFamilyId(null);
+      }
+    } catch (e) {
+      console.error(e);
     } finally {
       setLoading(false);
     }
   };
 
-  // --- ฟังก์ชันสร้างครอบครัวใหม่ ---
-  const handleCreateFamily = async () => {
-    if (!familyName.trim()) {
-      Alert.alert("แจ้งเตือน", "กรุณากรอกชื่อครอบครัว");
-      return;
-    }
-    setCreating(true);
-    try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      const { data: familyData, error: fError } = await supabase
-        .from("families")
-        .insert([{ name: familyName.trim() }])
-        .select()
-        .single();
-
-      if (fError) throw fError;
-
-      const { error: mError } = await supabase
-        .from("family_members")
-        .insert([
-          { family_id: familyData.id, user_id: user?.id, role: "admin" },
-        ]);
-
-      if (mError) throw mError;
-
-      Alert.alert("สำเร็จ!", `สร้างครอบครัว ${familyName} เรียบร้อยแล้ว`);
-      setIsCreateModalVisible(false);
-      setFamilyName("");
-      fetchUserData();
-    } catch (error: any) {
-      Alert.alert("Error", error.message);
-    } finally {
-      setCreating(false);
+  const fetchShoppingStats = async (fId: string) => {
+    const { data } = await supabase
+      .from("shopping_items")
+      .select("is_bought, price, quantity")
+      .eq("family_id", fId);
+    if (data) {
+      const total = data.length;
+      const boughtItems = data.filter((i) => i.is_bought);
+      const spent = boughtItems.reduce(
+        (acc, i) => acc + Number(i.price || 0) * (i.quantity || 1),
+        0,
+      );
+      setSummary({
+        total,
+        bought: boughtItems.length,
+        pending: total - boughtItems.length,
+      });
+      setTotalSpent(spent);
     }
   };
 
-  // --- ฟังก์ชันเข้าร่วมครอบครัวเดิม ---
-  const handleJoinFamily = async () => {
-    if (!joinId.trim()) {
-      Alert.alert("แจ้งเตือน", "กรุณากรอกรหัสครอบครัว");
-      return;
-    }
-    setJoining(true);
-    try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      const { data: family, error: fError } = await supabase
-        .from("families")
-        .select("id, name")
-        .eq("id", joinId.trim())
-        .single();
+  const handleLeaveFamily = () => {
+    Alert.alert("ออกจากครอบครัว", "ยืนยันการออกจากกลุ่ม?", [
+      { text: "ยกเลิก", style: "cancel" },
+      {
+        text: "ยืนยัน",
+        style: "destructive",
+        onPress: async () => {
+          const {
+            data: { user },
+          } = await supabase.auth.getUser();
+          if (!user) return;
 
-      if (fError || !family) throw new Error("ไม่พบรหัสครอบครัวนี้");
+          const { error } = await supabase
+            .from("family_members")
+            .delete()
+            .eq("user_id", user.id);
 
-      const { error: jError } = await supabase
-        .from("family_members")
-        .insert([{ family_id: family.id, user_id: user?.id, role: "member" }]);
-
-      if (jError) throw jError;
-
-      Alert.alert("สำเร็จ!", `คุณได้เข้าร่วมครอบครัว ${family.name} แล้ว`);
-      setIsJoinModalVisible(false);
-      setJoinId("");
-      fetchUserData();
-    } catch (error: any) {
-      Alert.alert("Error", error.message);
-    } finally {
-      setJoining(false);
-    }
-  };
-
-  // --- ฟังก์ชันออกจากครอบครัว ---
-  const handleLeaveFamily = async () => {
-    Alert.alert(
-      "ยืนยันการออกจากครอบครัว",
-      "คุณแน่ใจหรือไม่ว่าต้องการออกจากกลุ่มนี้? คุณจะไม่สามารถเห็นรายการซื้อของได้อีกจนกว่าจะเข้าร่วมใหม่",
-      [
-        { text: "ยกเลิก", style: "cancel" },
-        {
-          text: "ยืนยัน",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              const {
-                data: { user },
-              } = await supabase.auth.getUser();
-              if (!user) return;
-
-              const { error } = await supabase
-                .from("family_members")
-                .delete()
-                .eq("user_id", user.id);
-
-              if (error) throw error;
-
-              Alert.alert("สำเร็จ", "คุณออกจากครอบครัวเรียบร้อยแล้ว");
-              fetchUserData();
-            } catch (error: any) {
-              Alert.alert("เกิดข้อผิดพลาด", error.message);
-            }
-          },
+          if (!error) {
+            setFamilyId(null);
+            setSummary({ total: 0, bought: 0, pending: 0 });
+            setTotalSpent(0);
+            fetchData();
+          } else {
+            Alert.alert("ผิดพลาด", "ไม่สามารถออกจากครอบครัวได้");
+          }
         },
-      ],
-    );
+      },
+    ]);
   };
 
-  if (loading) {
+  if (loading)
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#2e7d32" />
       </View>
     );
-  }
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.welcome}>สวัสดีครับ,</Text>
-      <Text style={styles.name}>
-        {profile?.display_name || "สมาชิก HomeCart"}
-      </Text>
-
-      {hasFamily ? (
+    <ScrollView
+      style={styles.container}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+      }
+    >
+      <View style={styles.header}>
         <View>
-          <View style={styles.card}>
-            <Ionicons
-              name="checkmark-circle"
-              size={40}
-              color="#2e7d32"
-              style={{ marginBottom: 10 }}
-            />
-            <Text style={styles.cardTitle}>ครอบครัวของคุณพร้อมใช้งานแล้ว</Text>
-            <Text style={styles.cardSub}>
-              ไปที่เมนู รายการซื้อ เพื่อเพิ่มของกินของใช้ได้เลย!
-            </Text>
-          </View>
+          <Text style={styles.welcomeText}>สวัสดีครับ,</Text>
+          <Text style={styles.nameText}>
+            {profile?.display_name || "สมาชิก"}
+          </Text>
+        </View>
+        <TouchableOpacity style={styles.notificationBtn}>
+          <Ionicons name="notifications-outline" size={26} color="#1b5e20" />
+        </TouchableOpacity>
+      </View>
 
-          {/* ปุ่มออกจากครอบครัว */}
-          <TouchableOpacity
-            style={styles.leaveButton}
-            onPress={handleLeaveFamily}
-          >
-            <Ionicons name="exit-outline" size={22} color="#d32f2f" />
-            <Text style={styles.leaveText}>ออกจากครอบครัวนี้</Text>
-          </TouchableOpacity>
+      {familyId ? (
+        <View>
+          <View style={styles.spendingCard}>
+            <View>
+              <Text style={styles.spendingLabel}>ยอดใช้จ่ายรวมที่ซื้อแล้ว</Text>
+              <Text style={styles.spendingAmount}>
+                ฿
+                {totalSpent.toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                })}
+              </Text>
+            </View>
+            <View style={styles.iconCircle}>
+              <Ionicons name="wallet" size={30} color="#fff" />
+            </View>
+          </View>
+          <View style={styles.statsContainer}>
+            <View style={[styles.statBox, { borderLeftColor: "#4caf50" }]}>
+              <Ionicons
+                name="list"
+                size={20}
+                color="#4caf50"
+                style={styles.statIcon}
+              />
+              <Text style={styles.statValue}>{summary.total}</Text>
+              <Text style={styles.statSub}>รายการทั้งหมด</Text>
+            </View>
+            <View style={[styles.statBox, { borderLeftColor: "#ff9800" }]}>
+              <Ionicons
+                name="time"
+                size={20}
+                color="#ff9800"
+                style={styles.statIcon}
+              />
+              <Text style={styles.statValue}>{summary.pending}</Text>
+              <Text style={styles.statSub}>รอดำเนินการ</Text>
+            </View>
+            <View style={[styles.statBox, { borderLeftColor: "#2196f3" }]}>
+              <Ionicons
+                name="checkmark-done"
+                size={20}
+                color="#2196f3"
+                style={styles.statIcon}
+              />
+              <Text style={styles.statValue}>{summary.bought}</Text>
+              <Text style={styles.statSub}>ซื้อแล้ว</Text>
+            </View>
+          </View>
+          <View style={styles.menuGrid}>
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => router.push("/(tabs)/list")}
+            >
+              <View style={[styles.menuIcon, { backgroundColor: "#e8f5e9" }]}>
+                <Ionicons name="cart" size={24} color="#2e7d32" />
+              </View>
+              <Text style={styles.menuText}>รายการซื้อ</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={handleLeaveFamily}
+            >
+              <View style={[styles.menuIcon, { backgroundColor: "#ffebee" }]}>
+                <Ionicons name="exit" size={24} color="#d32f2f" />
+              </View>
+              <Text style={[styles.menuText, { color: "#d32f2f" }]}>
+                ออกจากครอบครัว
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
       ) : (
-        <View style={[styles.card, styles.warningCard]}>
-          <Text style={styles.cardTitle}>คุณยังไม่มีกลุ่มครอบครัว</Text>
-          <Text style={styles.cardSub}>
-            เลือกสร้างกลุ่มใหม่เพื่อเป็นหัวหน้าครอบครัว
-            หรือนำรหัสจากคนในบ้านมาเข้าร่วมกลุ่มเดิม
-          </Text>
-
-          <TouchableOpacity
-            style={styles.button}
-            onPress={() => setIsCreateModalVisible(true)}
-          >
-            <Text style={styles.buttonText}>สร้างครอบครัวใหม่</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.button, styles.joinButton]}
-            onPress={() => setIsJoinModalVisible(true)}
-          >
-            <Text style={styles.joinButtonText}>เข้าร่วมด้วยรหัสครอบครัว</Text>
-          </TouchableOpacity>
+        <View style={styles.emptyCard}>
+          <Ionicons name="people-circle-outline" size={80} color="#ddd" />
+          <Text style={styles.emptyTitle}>เข้าร่วมครอบครัวเพื่อเริ่มต้น</Text>
         </View>
       )}
-
-      {/* Modal: Create Family */}
-      <Modal visible={isCreateModalVisible} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>ระบุชื่อครอบครัว</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="เช่น บ้านแสนสุข, หอพัก 402"
-              value={familyName}
-              onChangeText={setFamilyName}
-            />
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                onPress={() => setIsCreateModalVisible(false)}
-                style={[styles.modalBtn, styles.cancelBtn]}
-              >
-                <Text>ยกเลิก</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={handleCreateFamily}
-                style={[styles.modalBtn, styles.confirmBtn]}
-                disabled={creating}
-              >
-                {creating ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.confirmText}>สร้าง</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Modal: Join Family */}
-      <Modal visible={isJoinModalVisible} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>เข้าร่วมครอบครัว</Text>
-            <Text style={styles.modalSubText}>
-              วางรหัส (Family ID) ที่ได้รับจากสมาชิกในบ้าน
-            </Text>
-            <TextInput
-              style={styles.input}
-              placeholder="วางรหัส UUID ที่นี่..."
-              value={joinId}
-              onChangeText={setJoinId}
-              autoCapitalize="none"
-            />
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                onPress={() => setIsJoinModalVisible(false)}
-                style={[styles.modalBtn, styles.cancelBtn]}
-              >
-                <Text>ยกเลิก</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={handleJoinFamily}
-                style={[styles.modalBtn, styles.confirmBtn]}
-                disabled={joining}
-              >
-                {joining ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.confirmText}>เข้าร่วม</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#f9f9f9",
-    padding: 25,
-    paddingTop: 60,
-  },
+  container: { flex: 1, backgroundColor: "#fdfdfd", paddingHorizontal: 22 },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
-  welcome: { fontSize: 18, color: "#666" },
-  name: {
-    fontSize: 32,
-    fontWeight: "bold",
-    color: "#1b5e20",
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 65,
     marginBottom: 30,
   },
-  card: {
-    backgroundColor: "#fff",
+  welcomeText: { fontSize: 16, color: "#888" },
+  nameText: { fontSize: 30, fontWeight: "bold", color: "#1b5e20" },
+  notificationBtn: {
+    padding: 10,
+    backgroundColor: "#f0f0f0",
+    borderRadius: 15,
+  },
+  spendingCard: {
+    backgroundColor: "#1b5e20",
     padding: 25,
-    borderRadius: 20,
-    elevation: 4,
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-  },
-  warningCard: { borderLeftWidth: 5, borderLeftColor: "#fbc02d" },
-  cardTitle: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#333",
-    marginBottom: 10,
-  },
-  cardSub: { fontSize: 14, color: "#666", marginBottom: 20, lineHeight: 20 },
-  button: {
-    backgroundColor: "#2e7d32",
-    padding: 16,
-    borderRadius: 12,
+    borderRadius: 28,
+    flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
+    marginBottom: 25,
   },
-  buttonText: { color: "#fff", fontWeight: "bold", fontSize: 16 },
-  joinButton: {
-    backgroundColor: "transparent",
-    borderWidth: 1,
-    borderColor: "#2e7d32",
-    marginTop: 12,
+  spendingLabel: { color: "#a5d6a7", fontSize: 13, fontWeight: "600" },
+  spendingAmount: {
+    color: "#fff",
+    fontSize: 32,
+    fontWeight: "bold",
+    marginTop: 4,
   },
-  joinButtonText: { color: "#2e7d32", fontWeight: "bold" },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "center",
-    padding: 20,
+  iconCircle: {
+    backgroundColor: "rgba(255,255,255,0.15)",
+    padding: 15,
+    borderRadius: 20,
   },
-  modalContent: { backgroundColor: "#fff", padding: 25, borderRadius: 20 },
-  modalTitle: { fontSize: 18, fontWeight: "bold", marginBottom: 10 },
-  modalSubText: { fontSize: 13, color: "#888", marginBottom: 15 },
-  input: {
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 20,
-  },
-  modalButtons: { flexDirection: "row", justifyContent: "flex-end" },
-  modalBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    marginLeft: 10,
-  },
-  cancelBtn: { backgroundColor: "#eee" },
-  confirmBtn: { backgroundColor: "#2e7d32" },
-  confirmText: { color: "#fff", fontWeight: "bold" },
-  leaveButton: {
+  statsContainer: { marginBottom: 25 },
+  statBox: {
+    backgroundColor: "#fff",
+    padding: 18,
+    borderRadius: 20,
+    marginBottom: 12,
+    borderLeftWidth: 6,
+    elevation: 2,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    marginTop: 20,
-    padding: 15,
-    backgroundColor: "#fff",
-    borderRadius: 15,
-    borderWidth: 1,
-    borderColor: "#ffcdd2",
   },
-  leaveText: { color: "#d32f2f", fontWeight: "bold", marginLeft: 8 },
+  statIcon: { marginRight: 15 },
+  statValue: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#333",
+    marginRight: 10,
+  },
+  statSub: { fontSize: 14, color: "#777" },
+  menuGrid: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 10,
+  },
+  menuItem: {
+    flex: 1,
+    backgroundColor: "#fff",
+    padding: 20,
+    borderRadius: 24,
+    alignItems: "center",
+    marginHorizontal: 6,
+    elevation: 2,
+  },
+  menuIcon: { padding: 12, borderRadius: 16, marginBottom: 10 },
+  menuText: { fontSize: 14, fontWeight: "600", color: "#444" },
+  emptyCard: { alignItems: "center", marginTop: 60, padding: 40 },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#444",
+    marginTop: 20,
+  },
 });

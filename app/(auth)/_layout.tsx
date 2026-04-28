@@ -4,7 +4,7 @@ export default function AuthLayout() {
   return (
     <Stack
       screenOptions={{
-        headerShown: false, // ปิดแถบด้านบนสำหรับหน้า Login/Register
+        headerShown: false,
         contentStyle: { backgroundColor: "#fff" },
       }}
     >

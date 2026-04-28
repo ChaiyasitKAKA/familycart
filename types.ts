@@ -36,13 +36,14 @@ export interface FamilyMember {
  * ตาราง ShoppingItems: รายการของที่จะซื้อในแต่ละครอบครัว
  */
 export interface ShoppingItem {
-  id: string;
-  family_id: string; // รายการนี้เป็นของครอบครัวไหน
-  name: string;
-  quantity: number;
-  is_bought: boolean;
-  added_by: string; // ใครเป็นคนเพิ่ม (Profile.id)
-  created_at: string;
+  id: string; // UUID จาก Supabase
+  family_id: string; // เชื่อมกับครอบครัว
+  name: string; // ชื่อสินค้า
+  quantity: number; // จำนวน (int4)
+  price: number; // ราคา (float8 หรือ numeric ใน Supabase จะกลายเป็น number ใน TS)
+  is_bought: boolean; // สถานะการซื้อ
+  added_by: string; // UUID ของคนเพิ่ม
+  created_at: string; // วันที่เพิ่ม
 }
 
 export type Tables = {

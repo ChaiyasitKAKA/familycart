@@ -22,8 +22,19 @@ export default function RegisterScreen() {
   const [loading, setLoading] = useState(false);
 
   const handleRegister = async () => {
-    if (!email || !password || !fullName) {
-      Alert.alert("แจ้งเตือน", "กรุณากรอกข้อมูลให้ครบถ้วน");
+    if (!fullName.trim() || !email.trim() || !password.trim()) {
+      Alert.alert(
+        "ข้อมูลไม่ครบถ้วน",
+        "กรุณากรอกชื่อ อีเมล และรหัสผ่านให้ครบถ้วน",
+      );
+      return;
+    }
+
+    if (password.length < 6) {
+      Alert.alert(
+        "รหัสผ่านสั้นเกินไป",
+        "กรุณาตั้งรหัสผ่านอย่างน้อย 6 ตัวอักษร",
+      );
       return;
     }
 
@@ -33,30 +44,40 @@ export default function RegisterScreen() {
         email: email.trim(),
         password: password,
         options: {
-          data: { display_name: fullName },
+          data: { display_name: fullName.trim() },
         },
       });
 
-      if (error) throw error;
+      if (error) {
+        if (error.message === "User already registered") {
+          Alert.alert(
+            "ลงทะเบียนไม่สำเร็จ",
+            "อีเมลนี้ถูกใช้งานไปแล้ว กรุณาใช้ีเมลอื่นหรือไปที่หน้าเข้าสู่ระบบ",
+            [{ text: "ตกลง" }],
+          );
+        } else if (error.message.includes("valid email")) {
+          Alert.alert("รูปแบบอีเมลผิด", "กรุณากรอกรูปแบบอีเมลให้ถูกต้อง");
+        } else {
+          Alert.alert("เกิดข้อผิดพลาด", error.message);
+        }
+        return;
+      }
 
-      // ตรวจสอบว่ามี user object กลับมาจริงๆ
       if (data?.user) {
-        Alert.alert("สำเร็จ!", "บัญชีของคุณถูกสร้างแล้ว", [
-          {
-            text: "ไปหน้าล็อกอิน",
-            onPress: () => router.replace("/(auth)/login"),
-          },
-        ]);
-      } else {
-        // กรณีไม่มี error แต่ user ไม่มา (เช่น ต้องยืนยันเมลก่อนแต่เราลืมปิด confirm email)
         Alert.alert(
-          "แจ้งเตือน",
-          "สมัครสำเร็จแล้ว แต่อาจต้องยืนยันอีเมลก่อนเข้าใช้งาน",
+          "สำเร็จ!",
+          "สร้างบัญชีเรียบร้อยแล้ว \n(กรุณาตรวจสอบอีเมลเพื่อยืนยันตนหากระบบต้องการ)",
+          [
+            {
+              text: "ไปหน้าล็อกอิน",
+              onPress: () => router.replace("/(auth)/login"),
+            },
+          ],
         );
       }
     } catch (error: any) {
-      console.log("DEBUG:", error.message);
-      Alert.alert("เกิดข้อผิดพลาด", error.message);
+      Alert.alert("ขออภัย", "ระบบขัดข้องชั่วคราว ไม่สามารถลงทะเบียนได้");
+      console.error("Registration Error:", error);
     } finally {
       setLoading(false);
     }
@@ -79,7 +100,6 @@ export default function RegisterScreen() {
         </View>
 
         <View style={styles.form}>
-          {/* ช่องกรอกชื่อ (สำหรับ Profiles Table) */}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>ชื่อ-นามสกุล</Text>
             <View style={styles.inputWrapper}>
@@ -91,14 +111,12 @@ export default function RegisterScreen() {
               />
               <TextInput
                 style={styles.input}
-                placeholder="สมชาย พุ่มเผื่อน"
                 value={fullName}
                 onChangeText={setFullName}
               />
             </View>
           </View>
 
-          {/* ช่องกรอกอีเมล */}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>อีเมล</Text>
             <View style={styles.inputWrapper}>
@@ -110,7 +128,6 @@ export default function RegisterScreen() {
               />
               <TextInput
                 style={styles.input}
-                placeholder="example@mail.com"
                 value={email}
                 onChangeText={setEmail}
                 autoCapitalize="none"
@@ -119,7 +136,6 @@ export default function RegisterScreen() {
             </View>
           </View>
 
-          {/* ช่องกรอกรหัสผ่าน */}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>รหัสผ่าน</Text>
             <View style={styles.inputWrapper}>
@@ -131,7 +147,7 @@ export default function RegisterScreen() {
               />
               <TextInput
                 style={styles.input}
-                placeholder="อย่างน้อย 6 ตัวอักษรขึ้นไป"
+                placeholder="อย่างน้อย 6 ตัวอักษร"
                 value={password}
                 onChangeText={setPassword}
                 secureTextEntry

@@ -13,7 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { supabase } from "../../supabase"; // ตรวจสอบ path ให้ตรงกับไฟล์ client ของคุณ
+import { supabase } from "../../supabase";
 
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
@@ -21,24 +21,38 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
-    if (!email || !password) {
-      Alert.alert("แจ้งเตือน", "กรุณากรอกอีเมลและรหัสผ่าน");
+    if (!email.trim() || !password.trim()) {
+      Alert.alert(
+        "ข้อมูลไม่ครบถ้วน",
+        "กรุณากรอกทั้งอีเมลและรหัสผ่านก่อนเข้าสู่ระบบ",
+        [{ text: "ตกลง" }],
+      );
       return;
     }
 
     setLoading(true);
     try {
       const { error } = await supabase.auth.signInWithPassword({
-        email,
+        email: email.trim(),
         password,
       });
 
-      if (error) throw error;
+      if (error) {
+        if (error.message.includes("Invalid login credentials")) {
+          Alert.alert(
+            "เข้าสู่ระบบไม่สำเร็จ",
+            "อีเมลหรือรหัสผ่านไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง",
+            [{ text: "ตกลง" }],
+          );
+        } else {
+          Alert.alert("เกิดข้อผิดพลาด", error.message);
+        }
+        return;
+      }
 
-      // ถ้าล็อกอินสำเร็จ ให้ไปที่หน้า Home ในโฟลเดอร์ (tabs)
       router.replace("/(tabs)/home");
     } catch (error: any) {
-      Alert.alert("เข้าสู่ระบบไม่สำเร็จ", error.message);
+      Alert.alert("ขออภัย", "ไม่สามารถเชื่อมต่อกับระบบได้ในขณะนี้");
     } finally {
       setLoading(false);
     }
@@ -61,7 +75,6 @@ export default function LoginScreen() {
         </View>
 
         <View style={styles.form}>
-          {/* ช่องกรอกอีเมล */}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>อีเมล</Text>
             <View style={styles.inputWrapper}>
@@ -73,7 +86,6 @@ export default function LoginScreen() {
               />
               <TextInput
                 style={styles.input}
-                placeholder="example@mail.com"
                 value={email}
                 onChangeText={setEmail}
                 autoCapitalize="none"
@@ -94,7 +106,6 @@ export default function LoginScreen() {
               />
               <TextInput
                 style={styles.input}
-                placeholder="กรอกรหัสผ่านของคุณ"
                 value={password}
                 onChangeText={setPassword}
                 secureTextEntry
